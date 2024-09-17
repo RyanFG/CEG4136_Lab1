@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <time.h>
+#include <cuda_runtime.h>
 
 #define N 1000  // Grid size
 #define BURN_DURATION 5000   // Tree burning duration in milliseconds (5 seconds)
@@ -29,16 +30,35 @@ float moveSpeed = 0.05f; // View movement speed
 bool dragging = false;  // Mouse drag indicator
 int lastMouseX, lastMouseY;  // Last mouse position when clicked
 
+int* forest_GPU;
+int* burnTime_GPU;
+int* newForest_GPU;
+
+__global__ void initializeTree() {
+    forest_GPU[blockIdx.x][threadIdx.x] = rand() % 2;  // 50% trees (1), 50% empty space (0)
+    burnTime_GPU[blockIdx.x][threadIdx.x] = 0;         // No tree is burning at the start
+
+}
+
 // Function to initialize the forest
 void initializeForest() {
     // Initializing the forest with 50% trees
     // Create Threads here instead of a 2D for loop, use a 2D grid of threads 1000 by 1000, optimize
-    for (int i = 0; i < N; i++) {
-        for (int j = 0; j < N; j++) {
-            forest[i][j] = rand() % 2; // 50% trees (1), 50% empty space (0)
-            burnTime[i][j] = 0;  // No tree is burning at the start
-        }
-    }
+       
+    cudaMemcpy(forest_GPU, forest, sizeof(forest), cudaMemcpyHostToDevice);
+    cudaMemcpy(burnTime_GPU, burnTime sizeof(burnTime), cudaMemcpyHostToDevice);
+
+    initialTree <<< N,N >>> ();
+
+    cudaMemcpy(forest, forest_GPU, sizeof(forest), cudaMemcpyDeviceToHost);
+    cudaMemcpy(burnTime, burnTime_GPU sizeof(burnTime), cudaMemcpyDeviceToHost);
+
+    //for (int i = 0; i < N; i++) {
+    //    for (int j = 0; j < N; j++) {
+    //        forest[i][j] = rand() % 2; // 50% trees (1), 50% empty space (0)
+    //        burnTime[i][j] = 0;  // No tree is burning at the start
+    //    }
+    //}
 
     // List of available positions to start fires
     // Can maybe use threads here? optimize
@@ -259,6 +279,9 @@ int main(int argc, char** argv) {
     glutCreateWindow("Simulation de feux de forêt/Forest Fire Simulation"); // Create the OpenGL window
 
     initGL();
+    cudaMalloc(forest_GPU,sizeof(forest));
+    cudaMalloc(burnTime_GPU, sizeof(burnTime));
+    cudaMalloc(newForest_GPU, sizeof(forest));
     initializeForest();
 
     glutDisplayFunc(display);
@@ -269,5 +292,8 @@ int main(int argc, char** argv) {
     glutTimerFunc(200, update, 0);
 
     glutMainLoop();
+    cudaFree(forest_GPU);
+    cudaFree(burnTime_GPU);
+    cudaFree(newForest_GPU);
     return 0;
 }
