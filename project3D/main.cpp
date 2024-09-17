@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <time.h>
 #include <cuda_runtime.h>
+#include <device_launch_parameters.h>
 
 #define N 1000  // Grid size
 #define BURN_DURATION 5000   // Tree burning duration in milliseconds (5 seconds)
@@ -30,11 +31,11 @@ float moveSpeed = 0.05f; // View movement speed
 bool dragging = false;  // Mouse drag indicator
 int lastMouseX, lastMouseY;  // Last mouse position when clicked
 
-int* forest_GPU;
-int* burnTime_GPU;
-int* newForest_GPU;
+std::vector<std::vector<int>>* forest_GPU;
+std::vector<std::vector<int>>* burnTime_GPU;
+std::vector<std::vector<int>>* newForest_GPU;
 
-__global__ void initializeTree() {
+__global__ void initializeTree(std::vector<std::vector<int>>* forest_GPU, std::vector<std::vector<int>>* burnTime_GPU) {
     forest_GPU[blockIdx.x][threadIdx.x] = rand() % 2;  // 50% trees (1), 50% empty space (0)
     burnTime_GPU[blockIdx.x][threadIdx.x] = 0;         // No tree is burning at the start
 
@@ -46,12 +47,12 @@ void initializeForest() {
     // Create Threads here instead of a 2D for loop, use a 2D grid of threads 1000 by 1000, optimize
        
     cudaMemcpy(forest_GPU, forest, sizeof(forest), cudaMemcpyHostToDevice);
-    cudaMemcpy(burnTime_GPU, burnTime sizeof(burnTime), cudaMemcpyHostToDevice);
+    cudaMemcpy(burnTime_GPU, burnTime, sizeof(burnTime), cudaMemcpyHostToDevice);
 
-    initialTree <<< N,N >>> ();
+    initializeTree <<< N,N >>> (forest_GPU,burnTime_GPU);
 
     cudaMemcpy(forest, forest_GPU, sizeof(forest), cudaMemcpyDeviceToHost);
-    cudaMemcpy(burnTime, burnTime_GPU sizeof(burnTime), cudaMemcpyDeviceToHost);
+    cudaMemcpy(burnTime, burnTime_GPU, sizeof(burnTime), cudaMemcpyDeviceToHost);
 
     //for (int i = 0; i < N; i++) {
     //    for (int j = 0; j < N; j++) {
@@ -279,9 +280,9 @@ int main(int argc, char** argv) {
     glutCreateWindow("Simulation de feux de forêt/Forest Fire Simulation"); // Create the OpenGL window
 
     initGL();
-    cudaMalloc(forest_GPU,sizeof(forest));
-    cudaMalloc(burnTime_GPU, sizeof(burnTime));
-    cudaMalloc(newForest_GPU, sizeof(forest));
+    cudaMalloc((void**)&forest_GPU, sizeof(forest));
+    cudaMalloc((void**)&burnTime_GPU, sizeof(burnTime));
+    cudaMalloc((void**)&newForest_GPU, sizeof(forest));
     initializeForest();
 
     glutDisplayFunc(display);
