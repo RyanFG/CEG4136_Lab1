@@ -7,6 +7,8 @@
 #include <time.h>
 #include <cuda_runtime.h>
 #include <device_launch_parameters.h>
+#include <curand.h>
+#include <curand_kernel.h>
 
 #define N 1000  // Grid size
 #define BURN_DURATION 5000   // Tree burning duration in milliseconds (5 seconds)
@@ -31,35 +33,42 @@ float moveSpeed = 0.05f; // View movement speed
 bool dragging = false;  // Mouse drag indicator
 int lastMouseX, lastMouseY;  // Last mouse position when clicked
 
-std::vector<std::vector<int>>* forest_GPU;
-std::vector<std::vector<int>>* burnTime_GPU;
-std::vector<std::vector<int>>* newForest_GPU;
+int* forest_GPU;
+int* burnTime_GPU;
+int* newForest_GPU;
 
-__global__ void initializeTree(std::vector<std::vector<int>>* forest_GPU, std::vector<std::vector<int>>* burnTime_GPU) {
-    forest_GPU[blockIdx.x][threadIdx.x] = rand() % 2;  // 50% trees (1), 50% empty space (0)
-    burnTime_GPU[blockIdx.x][threadIdx.x] = 0;         // No tree is burning at the start
+curandState* dev_curand_states;
 
+__global__ void setup_kernel(curandState* state, uint64_t seed)
+{
+    int gid = threadIdx.x + blockIdx.x * blockDim.x;
+    curand_init(seed, gid, 0, &state[gid]);
+}
+
+__global__ void initializeTree(curandState* globalState, int* forest_GPU, int* burnTime_GPU) {
+    int gid = threadIdx.x + blockIdx.x * blockDim.x;
+
+    forest_GPU[gid] = curand_uniform(globalState+gid) < 0.5 ? 0 : 1;  // 50% trees (1), 50% empty space (0)
+    burnTime_GPU[gid] = 0;         // No tree is burning at the start
 }
 
 // Function to initialize the forest
 void initializeForest() {
     // Initializing the forest with 50% trees
     // Create Threads here instead of a 2D for loop, use a 2D grid of threads 1000 by 1000, optimize
-       
-    cudaMemcpy(forest_GPU, forest, sizeof(forest), cudaMemcpyHostToDevice);
-    cudaMemcpy(burnTime_GPU, burnTime, sizeof(burnTime), cudaMemcpyHostToDevice);
+    
 
-    initializeTree <<< N,N >>> (forest_GPU,burnTime_GPU);
+    for (size_t i = 0; i < forest.size(); i++) {
+        cudaMemcpy(forest_GPU + i*N, forest[i].data(), N*sizeof(int), cudaMemcpyHostToDevice);
+        cudaMemcpy(burnTime_GPU + i*N, burnTime[i].data(), N*sizeof(int), cudaMemcpyHostToDevice);
+    }
 
-    cudaMemcpy(forest, forest_GPU, sizeof(forest), cudaMemcpyDeviceToHost);
-    cudaMemcpy(burnTime, burnTime_GPU, sizeof(burnTime), cudaMemcpyDeviceToHost);
+    initializeTree<<<N, N>>>(dev_curand_states, forest_GPU, burnTime_GPU);
 
-    //for (int i = 0; i < N; i++) {
-    //    for (int j = 0; j < N; j++) {
-    //        forest[i][j] = rand() % 2; // 50% trees (1), 50% empty space (0)
-    //        burnTime[i][j] = 0;  // No tree is burning at the start
-    //    }
-    //}
+    for (size_t i = 0; i < forest.size(); i++) {
+        cudaMemcpy(forest[i].data(), forest_GPU + i * N, N * sizeof(int), cudaMemcpyDeviceToHost);
+        cudaMemcpy(burnTime[i].data(), burnTime_GPU + i * N, N * sizeof(int), cudaMemcpyDeviceToHost);
+    }
 
     // List of available positions to start fires
     // Can maybe use threads here? optimize
@@ -280,9 +289,11 @@ int main(int argc, char** argv) {
     glutCreateWindow("Simulation de feux de forêt/Forest Fire Simulation"); // Create the OpenGL window
 
     initGL();
-    cudaMalloc((void**)&forest_GPU, sizeof(forest));
-    cudaMalloc((void**)&burnTime_GPU, sizeof(burnTime));
-    cudaMalloc((void**)&newForest_GPU, sizeof(forest));
+    cudaMalloc((void**)&forest_GPU, N * N * sizeof(int));
+    cudaMalloc((void**)&burnTime_GPU, N * N * sizeof(int));
+    cudaMalloc((void**)&newForest_GPU, N * N * sizeof(int));
+    cudaMalloc(&dev_curand_states, N * N * sizeof(curandState));
+    setup_kernel << <N, N >> > (dev_curand_states, time(NULL));
     initializeForest();
 
     glutDisplayFunc(display);
@@ -293,8 +304,8 @@ int main(int argc, char** argv) {
     glutTimerFunc(200, update, 0);
 
     glutMainLoop();
-    cudaFree(forest_GPU);
-    cudaFree(burnTime_GPU);
-    cudaFree(newForest_GPU);
+    cudaFree(&forest_GPU);
+    cudaFree(&burnTime_GPU);
+    cudaFree(&newForest_GPU);
     return 0;
 }
