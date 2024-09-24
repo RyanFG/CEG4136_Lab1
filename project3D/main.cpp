@@ -13,6 +13,9 @@
 #define N 1000  // Grid size
 #define BURN_DURATION 5000   // Tree burning duration in milliseconds (5 seconds)
 #define FIRE_START_COUNT 100  // Initial number of fire locations
+#if FIRE_START_COUNT > 1024
+    #error "Current implemantation forbids more than 1024 initial fires."
+#endif
 
 // Using vectors to manage memory
 std::vector<std::vector<int>> forest(N, std::vector<int>(N, 0));
@@ -39,36 +42,35 @@ int* newForest_GPU;
 
 curandState* dev_curand_states;
 
-__global__ void setup_kernel(curandState* state, uint64_t seed)
-{
-    int gid = threadIdx.x + blockIdx.x * blockDim.x;
+__global__ void setup_kernel(curandState* state, uint64_t seed) {
+    int gid = blockIdx.x * N + threadIdx.x;
+
     curand_init(seed, gid, 0, &state[gid]);
 }
 
 __global__ void initializeTree(curandState* globalState, int* forest_GPU, int* burnTime_GPU) {
-    int gid = threadIdx.x + blockIdx.x * blockDim.x;
+    int gid = blockIdx.x * N + threadIdx.x;
 
     forest_GPU[gid] = curand_uniform(globalState+gid) < 0.5 ? 0 : 1;  // 50% trees (1), 50% empty space (0)
     burnTime_GPU[gid] = 0;         // No tree is burning at the start
 }
 
+__global__ void igniteTree(std::pair<int, int>* availablePositions_GPU, int* forest_GPU, int* burnTime_GPU) {
+    int gid = availablePositions_GPU[threadIdx.x].first * N + availablePositions_GPU[threadIdx.x].second;
+
+    forest_GPU[gid] = 2;
+    burnTime_GPU[gid] = BURN_DURATION;
+}
+
 // Function to initialize the forest
 void initializeForest() {
     // Initializing the forest with 50% trees
-    // Create Threads here instead of a 2D for loop, use a 2D grid of threads 1000 by 1000, optimize
-    
-
-    for (size_t i = 0; i < forest.size(); i++) {
-        cudaMemcpy(forest_GPU + i*N, forest[i].data(), N*sizeof(int), cudaMemcpyHostToDevice);
-        cudaMemcpy(burnTime_GPU + i*N, burnTime[i].data(), N*sizeof(int), cudaMemcpyHostToDevice);
-    }
+    // Now Optimized with CUDA®
 
     initializeTree<<<N, N>>>(dev_curand_states, forest_GPU, burnTime_GPU);
+    cudaDeviceSynchronize();
 
-    for (size_t i = 0; i < forest.size(); i++) {
-        cudaMemcpy(forest[i].data(), forest_GPU + i * N, N * sizeof(int), cudaMemcpyDeviceToHost);
-        cudaMemcpy(burnTime[i].data(), burnTime_GPU + i * N, N * sizeof(int), cudaMemcpyDeviceToHost);
-    }
+    for (size_t i = 0; i < forest.size(); i++) cudaMemcpy(forest[i].data(), forest_GPU + i * N, N * sizeof(int), cudaMemcpyDeviceToHost);
 
     // List of available positions to start fires
     // Can maybe use threads here? optimize
@@ -87,13 +89,21 @@ void initializeForest() {
     std::shuffle(availablePositions.begin(), availablePositions.end(), g);
 
     // Ignite fires uniformly across the grid
-    for (int fire = 0; fire < FIRE_START_COUNT && !availablePositions.empty(); fire++) {
-        int fireX = availablePositions[fire].first;
-        int fireY = availablePositions[fire].second;
+    // Now Optimized with CUDA®
+    std::pair<int, int>* availablePositions_GPU;
+    cudaMalloc(&availablePositions_GPU, availablePositions.size() * sizeof(std::pair<int, int>));
+    cudaMemcpy(availablePositions_GPU, availablePositions.data(), availablePositions.size() * sizeof(std::pair<int, int>), cudaMemcpyHostToDevice);
 
-        forest[fireX][fireY] = 2; // Ignite the tree
-        burnTime[fireX][fireY] = BURN_DURATION; // Set the burn duration
+    size_t fires_to_start = availablePositions.size() < FIRE_START_COUNT ? availablePositions.size() : FIRE_START_COUNT;
+    igniteTree << <1, fires_to_start >> > (availablePositions_GPU, forest_GPU, burnTime_GPU);
+    cudaDeviceSynchronize();
+
+    for (size_t i = 0; i < forest.size(); i++) {
+        cudaMemcpy(forest[i].data(), forest_GPU + i * N, N * sizeof(int), cudaMemcpyDeviceToHost);
+        cudaMemcpy(burnTime[i].data(), burnTime_GPU + i * N, N * sizeof(int), cudaMemcpyDeviceToHost);
     }
+
+    cudaFree(&availablePositions_GPU);
 
     startTime = glutGet(GLUT_ELAPSED_TIME);  // Reset start time
     elapsedTime = 0;  // Reset elapsed time
