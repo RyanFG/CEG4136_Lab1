@@ -14,7 +14,7 @@
 #define BURN_DURATION 5000   // Tree burning duration in milliseconds (5 seconds)
 #define FIRE_START_COUNT 100  // Initial number of fire locations
 #if FIRE_START_COUNT > 1024
-    #error "Current implemantation forbids more than 1024 initial fires."
+#error "Current implemantation forbids more than 1024 initial fires."
 #endif
 
 // Using vectors to manage memory
@@ -51,7 +51,7 @@ __global__ void setup_kernel(curandState* state, uint64_t seed) {
 __global__ void initializeTree(curandState* globalState, int* forest_GPU, int* burnTime_GPU) {
     int gid = blockIdx.x * N + threadIdx.x;
 
-    forest_GPU[gid] = curand_uniform(globalState+gid) < 0.5 ? 0 : 1;  // 50% trees (1), 50% empty space (0)
+    forest_GPU[gid] = curand_uniform(globalState + gid) < 0.5 ? 0 : 1;  // 50% trees (1), 50% empty space (0)
     burnTime_GPU[gid] = 0;         // No tree is burning at the start
 }
 
@@ -62,12 +62,50 @@ __global__ void igniteTree(std::pair<int, int>* availablePositions_GPU, int* for
     burnTime_GPU[gid] = BURN_DURATION;
 }
 
+__global__ void fireSpreading(curandState* globalState, int* forest_GPU, int* newForest_GPU, int* burnTime_GPU, bool* burntOut) {
+    int gid = threadIdx.x + blockIdx.x * blockDim.x;            // current gid
+    int gidL = (threadIdx.x - 1) + blockIdx.x * blockDim.x;     // left gid
+    int gidR = (threadIdx.x + 1) + blockIdx.x * blockDim.x;     // right gid
+    int gidU = threadIdx.x + ((blockIdx.x + 1) * blockDim.x);   // up gid
+    int gidD = threadIdx.x + ((blockIdx.x - 1) * blockDim.x);   // down gid
+
+    if (forest_GPU[gid] == 2) {
+        burnTime_GPU[gid] -= 200;
+        if (burnTime_GPU[gid] <= 0) {
+            newForest_GPU[gid] = 3;
+        }
+    }
+    else if (forest_GPU[gid] == 1) {
+        if (forest_GPU[gidL] == 2 && threadIdx.x > 0 && (curand_normal(globalState + gidL) < 0.3f)) { //check left
+            newForest_GPU[gid] = 2;
+            burnTime_GPU[gid] = 5000;
+        };
+        if (forest_GPU[gidR] == 2 && threadIdx.x <= 999 && (curand_normal(globalState + gidR) < 0.3f)) { //check right
+            newForest_GPU[gid] = 2;
+            burnTime_GPU[gid] = 5000;
+        };
+        if (forest_GPU[gidU] == 2 && blockIdx.x > 0 && (curand_normal(globalState + gidU) < 0.3f)) { //check above
+            newForest_GPU[gid] = 2;
+            burnTime_GPU[gid] = 5000;
+        };
+        if (forest_GPU[gidD] == 2 && blockIdx.x <= 999 && (curand_normal(globalState + gidD) < 0.3f)) { // check below
+            newForest_GPU[gid] = 2;
+            burnTime_GPU[gid] = 5000;
+        };
+    }
+
+    if (forest_GPU[gid] == 2) {
+        *burntOut = false;
+    }
+}
+
+
 // Function to initialize the forest
 void initializeForest() {
     // Initializing the forest with 50% trees
-    // Now Optimized with CUDA®
+    // Now Optimized with CUDAÂ®
 
-    initializeTree<<<N, N>>>(dev_curand_states, forest_GPU, burnTime_GPU);
+    initializeTree << <N, N >> > (dev_curand_states, forest_GPU, burnTime_GPU);
     cudaDeviceSynchronize();
 
     for (size_t i = 0; i < forest.size(); i++) cudaMemcpy(forest[i].data(), forest_GPU + i * N, N * sizeof(int), cudaMemcpyDeviceToHost);
@@ -89,7 +127,7 @@ void initializeForest() {
     std::shuffle(availablePositions.begin(), availablePositions.end(), g);
 
     // Ignite fires uniformly across the grid
-    // Now Optimized with CUDA®
+    // Now Optimized with CUDAÂ®
     std::pair<int, int>* availablePositions_GPU;
     cudaMalloc(&availablePositions_GPU, availablePositions.size() * sizeof(std::pair<int, int>));
     cudaMemcpy(availablePositions_GPU, availablePositions.data(), availablePositions.size() * sizeof(std::pair<int, int>), cudaMemcpyHostToDevice);
@@ -136,7 +174,7 @@ void drawForest() {
                 glColor3f(0.0f, 0.0f, 0.0f);  // Burned tree (black)
             }
 
-           // Draw the cell
+            // Draw the cell
             float x = -1.0f + j * cellSize;
             float y = -1.0f + i * cellSize;
             glBegin(GL_QUADS);
@@ -161,44 +199,31 @@ void updateForest() {
 
     std::vector<std::vector<int>> newForest = forest;  // Copy the current forest
 
+    // Now Optimized with CUDAÂ®
     bool allBurnedOut = true; // Flag to check if all fires are out
+    bool* burntOut_GPU;
 
-    // Optimize by using grid of threads to eval each tree seperately
-    for (int i = 0; i < N; i++) {
-        for (int j = 0; j < N; j++) {
-            if (forest[i][j] == 2) {  // If the tree is on fire
-                burnTime[i][j] -= 200;  // Reduce the burning time
-
-               // Check if the fire is out
-                if (burnTime[i][j] <= 0) {
-                    newForest[i][j] = 3;  // Mark the tree as burned
-                }
-                else {
-                   // Propagation of fire to neighbors
-                    if (i > 0 && forest[i - 1][j] == 1 && (rand() / (float)RAND_MAX) < spreadProbability) {
-                        newForest[i - 1][j] = 2;
-                        burnTime[i - 1][j] = BURN_DURATION;
-                    }
-                    if (i < N - 1 && forest[i + 1][j] == 1 && (rand() / (float)RAND_MAX) < spreadProbability) {
-                        newForest[i + 1][j] = 2;
-                        burnTime[i + 1][j] = BURN_DURATION;
-                    }
-                    if (j > 0 && forest[i][j - 1] == 1 && (rand() / (float)RAND_MAX) < spreadProbability) {
-                        newForest[i][j - 1] = 2;
-                        burnTime[i][j - 1] = BURN_DURATION;
-                    }
-                    if (j < N - 1 && forest[i][j + 1] == 1 && (rand() / (float)RAND_MAX) < spreadProbability) {
-                        newForest[i][j + 1] = 2;
-                        burnTime[i][j + 1] = BURN_DURATION;
-                    }
-                }
-            }
-            // If a tree is still burning, continue the simulation
-            if (forest[i][j] == 2) {
-                allBurnedOut = false;
-            }
-        }
+    cudaMalloc(&burntOut_GPU, sizeof(bool));
+    for (size_t i = 0; i < forest.size(); i++) {
+        cudaMemcpy(forest_GPU + i * N, forest[i].data(), N * sizeof(int), cudaMemcpyHostToDevice);
+        cudaMemcpy(burnTime_GPU + i * N, burnTime[i].data(), N * sizeof(int), cudaMemcpyHostToDevice);
+        cudaMemcpy(newForest_GPU + i * N, newForest[i].data(), N * sizeof(int), cudaMemcpyHostToDevice);
     }
+    cudaMemcpy(burntOut_GPU, &allBurnedOut, sizeof(bool), cudaMemcpyHostToDevice);
+
+
+    fireSpreading << <N, N >> > (dev_curand_states, forest_GPU, newForest_GPU, burnTime_GPU, burntOut_GPU);
+    cudaDeviceSynchronize();
+
+    for (size_t i = 0; i < forest.size(); i++) {
+        cudaMemcpy(forest[i].data(), forest_GPU + i * N, N * sizeof(int), cudaMemcpyDeviceToHost);
+        cudaMemcpy(burnTime[i].data(), burnTime_GPU + i * N, N * sizeof(int), cudaMemcpyDeviceToHost);
+        cudaMemcpy(newForest[i].data(), newForest_GPU + i * N, N * sizeof(int), cudaMemcpyDeviceToHost);
+    }
+    cudaMemcpy(&allBurnedOut, burntOut_GPU, sizeof(bool), cudaMemcpyDeviceToHost);
+    cudaFree(burntOut_GPU);
+
+
 
     forest = newForest;  // Update the forest with the new copy
 
@@ -296,7 +321,7 @@ int main(int argc, char** argv) {
     glutInit(&argc, argv);
     glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB | GLUT_DEPTH);
     glutInitWindowSize(800, 800);
-    glutCreateWindow("Simulation de feux de forêt/Forest Fire Simulation"); // Create the OpenGL window
+    glutCreateWindow("Simulation de feux de forÃªt/Forest Fire Simulation"); // Create the OpenGL window
 
     initGL();
     cudaMalloc((void**)&forest_GPU, N * N * sizeof(int));
