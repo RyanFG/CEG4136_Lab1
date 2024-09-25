@@ -1,4 +1,5 @@
 #define USE_CUDA
+#define USE_BASIC_METRICS
 
 #include <GL/glut.h>
 #include <vector>
@@ -12,6 +13,9 @@
 #include <device_launch_parameters.h>
 #include <curand.h>
 #include <curand_kernel.h>
+#endif
+#ifdef USE_BASIC_METRICS
+#include<chrono>
 #endif
 
 #define N 1000  // Grid size
@@ -113,9 +117,17 @@ __global__ void fireSpreading(curandState* globalState, int* forest_GPU, int* ne
 }
 #endif
 
+#ifdef USE_BASIC_METRICS
+std::chrono::time_point<std::chrono::system_clock> start, end;
+#endif
+
 // Function to initialize the forest
 #ifdef USE_CUDA
 void initializeForest() {
+#ifdef USE_BASIC_METRICS
+    start = std::chrono::system_clock::now();
+#endif
+
     // Initializing the forest with 50% trees
     // Now Optimized with CUDA®
 
@@ -161,9 +173,17 @@ void initializeForest() {
     startTime = glutGet(GLUT_ELAPSED_TIME);  // Reset start time
     elapsedTime = 0;  // Reset elapsed time
     isPaused = false; // End of pause
+#ifdef USE_BASIC_METRICS
+    end = std::chrono::system_clock::now();
+    printf("Initialize took: %lldms\n", static_cast<long long int>(std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count()));
+#endif
 }
 #else
 void initializeForest() {
+#ifdef USE_BASIC_METRICS
+    start = std::chrono::system_clock::now();
+#endif
+
     // Initializing the forest with 50% trees
     // Create Threads here instead of a 2D for loop, use a 2D grid of threads 1000 by 1000, optimize
     for (int i = 0; i < N; i++) {
@@ -196,6 +216,11 @@ void initializeForest() {
     startTime = glutGet(GLUT_ELAPSED_TIME);  // Reset start time
     elapsedTime = 0;  // Reset elapsed time
     isPaused = false; // End of pause
+
+#ifdef USE_BASIC_METRICS
+    end = std::chrono::system_clock::now();
+    printf("Initialize took: %lldms\n", static_cast<long long int>(std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count()));
+#endif
 }
 #endif
 
@@ -241,6 +266,10 @@ void drawForest() {
 // Function to update the forest and fire propagation
 #ifdef USE_CUDA
 void updateForest() {
+#ifdef USE_BASIC_METRICS
+    start = std::chrono::system_clock::now();
+#endif
+
     if (isPaused) {  // If the simulation is paused, reset the forest after the pause
         if (glutGet(GLUT_ELAPSED_TIME) - pauseStartTime >= 3000) {
             initializeForest(); // Reset the forest after 3 seconds
@@ -269,9 +298,18 @@ void updateForest() {
         isPaused = true;
         pauseStartTime = glutGet(GLUT_ELAPSED_TIME);
     }
+
+#ifdef USE_BASIC_METRICS
+    end = std::chrono::system_clock::now();
+    printf("Update took: %lldms\n", static_cast<long long int>(std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count()));
+#endif
 }
 #else
 void updateForest() {
+#ifdef USE_BASIC_METRICS
+    start = std::chrono::system_clock::now();
+#endif
+
     if (isPaused) {  // If the simulation is paused, reset the forest after the pause
         if (glutGet(GLUT_ELAPSED_TIME) - pauseStartTime >= 3000) {
             initializeForest(); // Reset the forest after 3 seconds
@@ -320,6 +358,11 @@ void updateForest() {
         isPaused = true;
         pauseStartTime = glutGet(GLUT_ELAPSED_TIME);
     }
+
+#ifdef USE_BASIC_METRICS
+    end = std::chrono::system_clock::now();
+    printf("Update took: %lldms\n", static_cast<long long int>(std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count()));
+#endif
 }
 #endif
 
