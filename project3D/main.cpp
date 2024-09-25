@@ -23,6 +23,7 @@
 #if FIRE_START_COUNT > 1024
 #error "Current implemantation forbids more than 1024 initial fires."
 #endif
+#define SPREAD_PROBABILITY 0.3f
 
 // Using vectors to manage memory
 std::vector<std::vector<int>> forest(N, std::vector<int>(N, 0));
@@ -31,7 +32,7 @@ std::vector<std::vector<int>> burnTime(N, std::vector<int>(N, 0));
 int simulationDuration = 60000;  // Simulation duration (60 seconds)
 int startTime = 0;   // Start time in milliseconds
 int elapsedTime = 0;  // Elapsed time
-float spreadProbability = 0.3f;  // Probability that fire spreads to a neighboring tree
+//float spreadProbability = 0.3f;  // Probability that fire spreads to a neighboring tree
 
 bool isPaused = false; // Pause indicator
 int pauseStartTime = 0;   // Start time of pause
@@ -72,37 +73,39 @@ __global__ void igniteTree(std::pair<int, int>* availablePositions_GPU, int* for
 }
 
 __global__ void fireSpreading(curandState* globalState, int* forest_GPU, int* newForest_GPU, int* burnTime_GPU, bool* burntOut) {
-    int gid = threadIdx.x + blockIdx.x * blockDim.x;            // current gid
-    int gidL = (threadIdx.x - 1) + blockIdx.x * blockDim.x;     // left gid
-    int gidR = (threadIdx.x + 1) + blockIdx.x * blockDim.x;     // right gid
-    int gidU = threadIdx.x + ((blockIdx.x + 1) * blockDim.x);   // up gid
-    int gidD = threadIdx.x + ((blockIdx.x - 1) * blockDim.x);   // down gid
+    int gid = threadIdx.x + blockIdx.x * N;            // current gid
+    int gidL = (threadIdx.x - 1) + blockIdx.x * N;     // left gid
+    int gidR = (threadIdx.x + 1) + blockIdx.x * N;     // right gid
+    int gidU = threadIdx.x + ((blockIdx.x - 1) * N);   // up gid
+    int gidD = threadIdx.x + ((blockIdx.x + 1) * N);   // down gid
 
-    if (forest_GPU[gid] == 2) {
-        burnTime_GPU[gid] -= 200;
+    if (forest_GPU[gid] == 2) { // If the tree is on fire
+        burnTime_GPU[gid] -= 200; // Reduce the burning time
+        // Check if the fire is out
         if (burnTime_GPU[gid] <= 0) {
-            newForest_GPU[gid] = 3;
+            newForest_GPU[gid] = 3; // Mark the tree as burned
+        }
+        else {
+            // Propagation of fire to neighbors
+            if (threadIdx.x > 0 && forest_GPU[gidL] == 1 && curand_normal(globalState + gidL) < SPREAD_PROBABILITY) { //check left
+                newForest_GPU[gidL] = 2;
+                burnTime_GPU[gidL] = BURN_DURATION;
+            }
+            if (threadIdx.x < N-1 && forest_GPU[gidR] == 1 && curand_normal(globalState + gidR) < SPREAD_PROBABILITY) { //check right
+                newForest_GPU[gidR] = 2;
+                burnTime_GPU[gidR] = BURN_DURATION;
+            }
+            if (blockIdx.x > 0 && forest_GPU[gidU] == 1 && curand_normal(globalState + gidU) < SPREAD_PROBABILITY) { //check above
+                newForest_GPU[gidU] = 2;
+                burnTime_GPU[gidU] = BURN_DURATION;
+            }
+            if (blockIdx.x < N-1 && forest_GPU[gidD] == 1 && curand_normal(globalState + gidD) < SPREAD_PROBABILITY) { // check below
+                newForest_GPU[gidD] = 2;
+                burnTime_GPU[gidD] = BURN_DURATION;
+            }
         }
     }
-    else if (forest_GPU[gid] == 1) {
-        if (forest_GPU[gidL] == 2 && threadIdx.x > 0 && (curand_normal(globalState + gidL) < 0.3f)) { //check left
-            newForest_GPU[gid] = 2;
-            burnTime_GPU[gid] = 5000;
-        };
-        if (forest_GPU[gidR] == 2 && threadIdx.x <= 999 && (curand_normal(globalState + gidR) < 0.3f)) { //check right
-            newForest_GPU[gid] = 2;
-            burnTime_GPU[gid] = 5000;
-        };
-        if (forest_GPU[gidU] == 2 && blockIdx.x > 0 && (curand_normal(globalState + gidU) < 0.3f)) { //check above
-            newForest_GPU[gid] = 2;
-            burnTime_GPU[gid] = 5000;
-        };
-        if (forest_GPU[gidD] == 2 && blockIdx.x <= 999 && (curand_normal(globalState + gidD) < 0.3f)) { // check below
-            newForest_GPU[gid] = 2;
-            burnTime_GPU[gid] = 5000;
-        };
-    }
-
+    // If a tree is still burning, continue the simulation
     if (forest_GPU[gid] == 2) {
         *burntOut = false;
     }
@@ -287,19 +290,19 @@ void updateForest() {
                 }
                 else {
                     // Propagation of fire to neighbors
-                    if (i > 0 && forest[i - 1][j] == 1 && (rand() / (float)RAND_MAX) < spreadProbability) {
+                    if (i > 0 && forest[i - 1][j] == 1 && (rand() / (float)RAND_MAX) < SPREAD_PROBABILITY) {
                         newForest[i - 1][j] = 2;
                         burnTime[i - 1][j] = BURN_DURATION;
                     }
-                    if (i < N - 1 && forest[i + 1][j] == 1 && (rand() / (float)RAND_MAX) < spreadProbability) {
+                    if (i < N - 1 && forest[i + 1][j] == 1 && (rand() / (float)RAND_MAX) < SPREAD_PROBABILITY) {
                         newForest[i + 1][j] = 2;
                         burnTime[i + 1][j] = BURN_DURATION;
                     }
-                    if (j > 0 && forest[i][j - 1] == 1 && (rand() / (float)RAND_MAX) < spreadProbability) {
+                    if (j > 0 && forest[i][j - 1] == 1 && (rand() / (float)RAND_MAX) < SPREAD_PROBABILITY) {
                         newForest[i][j - 1] = 2;
                         burnTime[i][j - 1] = BURN_DURATION;
                     }
-                    if (j < N - 1 && forest[i][j + 1] == 1 && (rand() / (float)RAND_MAX) < spreadProbability) {
+                    if (j < N - 1 && forest[i][j + 1] == 1 && (rand() / (float)RAND_MAX) < SPREAD_PROBABILITY) {
                         newForest[i][j + 1] = 2;
                         burnTime[i][j + 1] = BURN_DURATION;
                     }
