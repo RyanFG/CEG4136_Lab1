@@ -47,6 +47,7 @@ int lastMouseX, lastMouseY;  // Last mouse position when clicked
 int* forest_GPU;
 int* burnTime_GPU;
 int* newForest_GPU;
+bool* burntOut_GPU;
 
 curandState* dev_curand_states;
 
@@ -145,9 +146,10 @@ void initializeForest() {
     igniteTree << <1, fires_to_start >> > (availablePositions_GPU, forest_GPU, burnTime_GPU);
     cudaDeviceSynchronize();
 
+    cudaMemcpy(newForest_GPU, forest_GPU, N * N * sizeof(int), cudaMemcpyDeviceToDevice);
     for (size_t i = 0; i < forest.size(); i++) {
         cudaMemcpy(forest[i].data(), forest_GPU + i * N, N * sizeof(int), cudaMemcpyDeviceToHost);
-        cudaMemcpy(burnTime[i].data(), burnTime_GPU + i * N, N * sizeof(int), cudaMemcpyDeviceToHost);
+        //cudaMemcpy(burnTime[i].data(), burnTime_GPU + i * N, N * sizeof(int), cudaMemcpyDeviceToHost);
     }
 
     cudaFree(&availablePositions_GPU);
@@ -206,7 +208,7 @@ void drawForest() {
     for (int i = 0; i < N; i++) {
         for (int j = 0; j < N; j++) {
             // Set color based on the state of the cell
-            if (forest[i][j] == 0 && burnTime[i][j] == 0) {
+            if (forest[i][j] == 0 /* && burnTime[i][j] == 0*/) { // FIXME: Is checking for burnTime really required here? Seems to be working without, commenting copy-back calls
                 glColor3f(0.8f, 0.8f, 0.8f);  // Empty space (gray)
             }
             else if (forest[i][j] == 1) {
@@ -246,31 +248,18 @@ void updateForest() {
 
     // Now Optimized with CUDA®
     bool allBurnedOut = true; // Flag to check if all fires are out
-    bool* burntOut_GPU;
-
-    cudaMalloc(&burntOut_GPU, sizeof(bool));
-    for (size_t i = 0; i < forest.size(); i++) {
-        cudaMemcpy(forest_GPU + i * N, forest[i].data(), N * sizeof(int), cudaMemcpyHostToDevice);
-        cudaMemcpy(burnTime_GPU + i * N, burnTime[i].data(), N * sizeof(int), cudaMemcpyHostToDevice);
-        cudaMemcpy(newForest_GPU + i * N, newForest[i].data(), N * sizeof(int), cudaMemcpyHostToDevice);
-    }
     cudaMemcpy(burntOut_GPU, &allBurnedOut, sizeof(bool), cudaMemcpyHostToDevice);
-
 
     fireSpreading << <N, N >> > (dev_curand_states, forest_GPU, newForest_GPU, burnTime_GPU, burntOut_GPU);
     cudaDeviceSynchronize();
 
+    cudaMemcpy(&allBurnedOut, burntOut_GPU, sizeof(bool), cudaMemcpyDeviceToHost);
     for (size_t i = 0; i < forest.size(); i++) {
         cudaMemcpy(forest[i].data(), forest_GPU + i * N, N * sizeof(int), cudaMemcpyDeviceToHost);
-        cudaMemcpy(burnTime[i].data(), burnTime_GPU + i * N, N * sizeof(int), cudaMemcpyDeviceToHost);
-        cudaMemcpy(newForest[i].data(), newForest_GPU + i * N, N * sizeof(int), cudaMemcpyDeviceToHost);
+        //cudaMemcpy(burnTime[i].data(), burnTime_GPU + i * N, N * sizeof(int), cudaMemcpyDeviceToHost);
     }
-    cudaMemcpy(&allBurnedOut, burntOut_GPU, sizeof(bool), cudaMemcpyDeviceToHost);
-    cudaFree(burntOut_GPU);
-
-
-
-    forest = newForest;  // Update the forest with the new copy
+    cudaMemcpy(forest_GPU, newForest_GPU, N * N * sizeof(int), cudaMemcpyDeviceToDevice);
+    
 
     if (allBurnedOut) {  // If all fires are out, pause the simulation
         isPaused = true;
@@ -422,10 +411,11 @@ int main(int argc, char** argv) {
 
     initGL();
 #ifdef USE_CUDA
-    cudaMalloc((void**)&forest_GPU, N * N * sizeof(int));
-    cudaMalloc((void**)&burnTime_GPU, N * N * sizeof(int));
-    cudaMalloc((void**)&newForest_GPU, N * N * sizeof(int));
+    cudaMalloc(&forest_GPU, N * N * sizeof(int));
+    cudaMalloc(&burnTime_GPU, N * N * sizeof(int));
+    cudaMalloc(&newForest_GPU, N * N * sizeof(int));
     cudaMalloc(&dev_curand_states, N * N * sizeof(curandState));
+    cudaMalloc(&burntOut_GPU, sizeof(bool));
     setup_kernel << <N, N >> > (dev_curand_states, time(NULL));
 #endif
     initializeForest();
@@ -442,6 +432,7 @@ int main(int argc, char** argv) {
     cudaFree(&forest_GPU);
     cudaFree(&burnTime_GPU);
     cudaFree(&newForest_GPU);
+    cudaFree(&burntOut_GPU);
 #endif
     return 0;
 }
