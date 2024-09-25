@@ -24,6 +24,7 @@
 #error "Current implemantation forbids more than 1024 initial fires."
 #endif
 #define SPREAD_PROBABILITY 0.3f
+#define SIMULATION_MIN_INTERVAL 0
 
 // Using vectors to manage memory
 std::vector<std::vector<int>> forest(N, std::vector<int>(N, 0));
@@ -336,7 +337,7 @@ void display() {
 void update(int value) {
     updateForest();  // Update the forest at each cycle
     glutPostRedisplay();  // Request a new rendering
-    glutTimerFunc(200, update, 0);  // Schedule the next update in 200 ms
+    glutTimerFunc(SIMULATION_MIN_INTERVAL, update, 0);  // Schedule the next update in 200 ms
 }
 
 // Keyboard handling for zooming and resetting
@@ -428,7 +429,7 @@ int main(int argc, char** argv) {
     glutSpecialFunc(specialKeys);
     glutMouseFunc(mouse);
     glutMotionFunc(mouseMotion);
-    glutTimerFunc(200, update, 0);
+    glutTimerFunc(SIMULATION_MIN_INTERVAL, update, 0);
 
     glutMainLoop();
 #ifdef USE_CUDA
