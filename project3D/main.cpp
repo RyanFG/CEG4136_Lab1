@@ -92,19 +92,19 @@ __global__ void fireSpreading(curandState* globalState, int* forest_GPU, int* ne
         }
         else {
             // Propagation of fire to neighbors
-            if (threadIdx.x > 0 && forest_GPU[gidL] == 1 && curand_normal(globalState + gidL) < SPREAD_PROBABILITY) { //check left
+            if (threadIdx.x > 0 && forest_GPU[gidL] == 1 && curand_uniform(globalState + gidL) < SPREAD_PROBABILITY) { //check left
                 newForest_GPU[gidL] = 2;
                 burnTime_GPU[gidL] = BURN_DURATION;
             }
-            if (threadIdx.x < N-1 && forest_GPU[gidR] == 1 && curand_normal(globalState + gidR) < SPREAD_PROBABILITY) { //check right
+            if (threadIdx.x < N-1 && forest_GPU[gidR] == 1 && curand_uniform(globalState + gidR) < SPREAD_PROBABILITY) { //check right
                 newForest_GPU[gidR] = 2;
                 burnTime_GPU[gidR] = BURN_DURATION;
             }
-            if (blockIdx.x > 0 && forest_GPU[gidU] == 1 && curand_normal(globalState + gidU) < SPREAD_PROBABILITY) { //check above
+            if (blockIdx.x > 0 && forest_GPU[gidU] == 1 && curand_uniform(globalState + gidU) < SPREAD_PROBABILITY) { //check above
                 newForest_GPU[gidU] = 2;
                 burnTime_GPU[gidU] = BURN_DURATION;
             }
-            if (blockIdx.x < N-1 && forest_GPU[gidD] == 1 && curand_normal(globalState + gidD) < SPREAD_PROBABILITY) { // check below
+            if (blockIdx.x < N-1 && forest_GPU[gidD] == 1 && curand_uniform(globalState + gidD) < SPREAD_PROBABILITY) { // check below
                 newForest_GPU[gidD] = 2;
                 burnTime_GPU[gidD] = BURN_DURATION;
             }
@@ -130,7 +130,6 @@ void initializeForest() {
 
     // Initializing the forest with 50% trees
     // Now Optimized with CUDA®
-
     initializeTree << <N, N >> > (dev_curand_states, forest_GPU, burnTime_GPU);
     cudaDeviceSynchronize();
 
