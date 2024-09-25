@@ -1,3 +1,5 @@
+#define USE_CUDA
+
 #include <GL/glut.h>
 #include <vector>
 #include <random>    // For std::shuffle and std::mt19937
@@ -5,12 +7,17 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <time.h>
+#ifdef USE_CUDA
 #include <cuda_runtime.h>
 #include <device_launch_parameters.h>
 #include <curand.h>
 #include <curand_kernel.h>
+#endif
 
 #define N 1000  // Grid size
+#if N > 1024
+#error "Current implemantation forbids grids bigger than 1024x1024."
+#endif
 #define BURN_DURATION 5000   // Tree burning duration in milliseconds (5 seconds)
 #define FIRE_START_COUNT 100  // Initial number of fire locations
 #if FIRE_START_COUNT > 1024
@@ -36,6 +43,7 @@ float moveSpeed = 0.05f; // View movement speed
 bool dragging = false;  // Mouse drag indicator
 int lastMouseX, lastMouseY;  // Last mouse position when clicked
 
+#ifdef USE_CUDA
 int* forest_GPU;
 int* burnTime_GPU;
 int* newForest_GPU;
@@ -98,9 +106,10 @@ __global__ void fireSpreading(curandState* globalState, int* forest_GPU, int* ne
         *burntOut = false;
     }
 }
-
+#endif
 
 // Function to initialize the forest
+#ifdef USE_CUDA
 void initializeForest() {
     // Initializing the forest with 50% trees
     // Now Optimized with CUDA®
@@ -147,6 +156,42 @@ void initializeForest() {
     elapsedTime = 0;  // Reset elapsed time
     isPaused = false; // End of pause
 }
+#else
+void initializeForest() {
+    // Initializing the forest with 50% trees
+    // Create Threads here instead of a 2D for loop, use a 2D grid of threads 1000 by 1000, optimize
+    for (int i = 0; i < N; i++) {
+        for (int j = 0; j < N; j++) {
+            forest[i][j] = rand() % 2; // 50% trees (1), 50% empty space (0)
+            burnTime[i][j] = 0;  // No tree is burning at the start
+        }
+    }
+    // List of available positions to start fires
+    // Can maybe use threads here? optimize
+    std::vector<std::pair<int, int>> availablePositions;
+    for (int i = 0; i < N; i++) {
+        for (int j = 0; j < N; j++) {
+            if (forest[i][j] == 1) {   // Add positions with trees to the list
+                availablePositions.push_back({ i, j });
+            }
+        }
+    }
+    // Shuffle the available positions for a more uniform distribution
+    std::random_device rd;  // Random number generator based on system implementation
+    std::mt19937 g(rd());  // Mersenne Twister-based pseudo-random number generator
+    std::shuffle(availablePositions.begin(), availablePositions.end(), g);
+    // Ignite fires uniformly across the grid
+    for (int fire = 0; fire < FIRE_START_COUNT && !availablePositions.empty(); fire++) {
+        int fireX = availablePositions[fire].first;
+        int fireY = availablePositions[fire].second;
+        forest[fireX][fireY] = 2; // Ignite the tree
+        burnTime[fireX][fireY] = BURN_DURATION; // Set the burn duration
+    }
+    startTime = glutGet(GLUT_ELAPSED_TIME);  // Reset start time
+    elapsedTime = 0;  // Reset elapsed time
+    isPaused = false; // End of pause
+}
+#endif
 
 // OpenGL initialization function
 void initGL() {
@@ -188,7 +233,7 @@ void drawForest() {
 }
 
 // Function to update the forest and fire propagation
-// Suggested by lab manual to optimize
+#ifdef USE_CUDA
 void updateForest() {
     if (isPaused) {  // If the simulation is paused, reset the forest after the pause
         if (glutGet(GLUT_ELAPSED_TIME) - pauseStartTime >= 3000) {
@@ -232,6 +277,58 @@ void updateForest() {
         pauseStartTime = glutGet(GLUT_ELAPSED_TIME);
     }
 }
+#else
+void updateForest() {
+    if (isPaused) {  // If the simulation is paused, reset the forest after the pause
+        if (glutGet(GLUT_ELAPSED_TIME) - pauseStartTime >= 3000) {
+            initializeForest(); // Reset the forest after 3 seconds
+        }
+        return;
+    }
+    std::vector<std::vector<int>> newForest = forest;  // Copy the current forest
+    bool allBurnedOut = true; // Flag to check if all fires are out
+    // Optimize by using grid of threads to eval each tree seperately
+    for (int i = 0; i < N; i++) {
+        for (int j = 0; j < N; j++) {
+            if (forest[i][j] == 2) {  // If the tree is on fire
+                burnTime[i][j] -= 200;  // Reduce the burning time
+                // Check if the fire is out
+                if (burnTime[i][j] <= 0) {
+                    newForest[i][j] = 3;  // Mark the tree as burned
+                }
+                else {
+                    // Propagation of fire to neighbors
+                    if (i > 0 && forest[i - 1][j] == 1 && (rand() / (float)RAND_MAX) < spreadProbability) {
+                        newForest[i - 1][j] = 2;
+                        burnTime[i - 1][j] = BURN_DURATION;
+                    }
+                    if (i < N - 1 && forest[i + 1][j] == 1 && (rand() / (float)RAND_MAX) < spreadProbability) {
+                        newForest[i + 1][j] = 2;
+                        burnTime[i + 1][j] = BURN_DURATION;
+                    }
+                    if (j > 0 && forest[i][j - 1] == 1 && (rand() / (float)RAND_MAX) < spreadProbability) {
+                        newForest[i][j - 1] = 2;
+                        burnTime[i][j - 1] = BURN_DURATION;
+                    }
+                    if (j < N - 1 && forest[i][j + 1] == 1 && (rand() / (float)RAND_MAX) < spreadProbability) {
+                        newForest[i][j + 1] = 2;
+                        burnTime[i][j + 1] = BURN_DURATION;
+                    }
+                }
+            }
+            // If a tree is still burning, continue the simulation
+            if (forest[i][j] == 2) {
+                allBurnedOut = false;
+            }
+        }
+    }
+    forest = newForest;  // Update the forest with the new copy
+    if (allBurnedOut) {  // If all fires are out, pause the simulation
+        isPaused = true;
+        pauseStartTime = glutGet(GLUT_ELAPSED_TIME);
+    }
+}
+#endif
 
 // Display function
 void display() {
@@ -324,11 +421,13 @@ int main(int argc, char** argv) {
     glutCreateWindow("Simulation de feux de forêt/Forest Fire Simulation"); // Create the OpenGL window
 
     initGL();
+#ifdef USE_CUDA
     cudaMalloc((void**)&forest_GPU, N * N * sizeof(int));
     cudaMalloc((void**)&burnTime_GPU, N * N * sizeof(int));
     cudaMalloc((void**)&newForest_GPU, N * N * sizeof(int));
     cudaMalloc(&dev_curand_states, N * N * sizeof(curandState));
     setup_kernel << <N, N >> > (dev_curand_states, time(NULL));
+#endif
     initializeForest();
 
     glutDisplayFunc(display);
@@ -339,8 +438,10 @@ int main(int argc, char** argv) {
     glutTimerFunc(200, update, 0);
 
     glutMainLoop();
+#ifdef USE_CUDA
     cudaFree(&forest_GPU);
     cudaFree(&burnTime_GPU);
     cudaFree(&newForest_GPU);
+#endif
     return 0;
 }
